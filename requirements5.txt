@@ -1,0 +1,5 @@
+streamlit
+requests
+Pillow
+numpy
+replicate # 範例: 如果您使用 Replicate 的 API

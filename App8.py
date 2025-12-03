@@ -5,7 +5,11 @@ from PIL import Image
 import io
 import base64
 import datetime
-import os # 新增: 處理環境變數
+import os 
+# === [新增/修改] 導入 Google GenAI SDK ===
+from google import genai
+from google.genai import types 
+# =======================================
 
 # === 設定頁面 ===
 st.set_page_config(
@@ -15,7 +19,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# === 常數與預設資料 (保持不變) ===
+# === 常數與預設資料 ===
 FOOTER_PRESETS = [
     "週末交易怕滑點？快用 OKX Wallet DEX 聚合，最優匯率一鍵換！",
     "OKX Wallet 支援百條公鏈，跨鏈交易一鍵搞定，省時又省力。",
@@ -285,42 +289,60 @@ def get_default_token_image(symbol):
         pass
     return None
 
-# 【新增功能】AI 圖片生成接口
+# 【已修改】AI 圖片生成接口：使用 Gemini API
 def generate_ai_image_logic(prompt: str) -> Image.Image | None:
     """
-    呼叫外部 AI 圖片生成 API (例如 Stable Diffusion)。
-    請在此處替換為您選擇的服務的實際 API 呼叫邏輯。
+    呼叫 Gemini API 進行圖像生成。
     """
-    
-    # ⚠️ 注意: 這裡需要您自行實作 API 呼叫的細節。
-    # 範例（假設您使用 Replicate 的 Stable Diffusion API）：
-    # try:
-    #     import replicate
-    #     client = replicate.Client(api_token=os.getenv("REPLICATE_API_TOKEN"))
-    #     
-    #     # 範例: 呼叫 Stable Diffusion 3
-    #     output = client.run(
-    #         "stability-ai/stable-diffusion-3",
-    #         input={
-    #             "prompt": f"Neon style, digital currency news background, no text, {prompt}",
-    #             "aspect_ratio": "16:9",
-    #             "output_format": "png"
-    #         }
-    #     )
-    #     
-    #     # 假設 API 返回圖片的 URL，您需要下載它
-    #     if output and isinstance(output, list) and output[0]:
-    #         img_url = output[0]
-    #         img_resp = requests.get(img_url, timeout=10)
-    #         return Image.open(io.BytesIO(img_resp.content))
-    #     return None
-    # except Exception as e:
-    #     st.error(f"AI 圖片生成失敗: {e}")
-    #     return None
-    
-    st.error("AI 圖片生成功能尚未配置 API 呼叫邏輯。")
-    st.warning(f"當前提示詞: {prompt}")
-    return None
+    try:
+        # 確保 GEMINI_API_KEY 環境變數已設定
+        if not os.getenv("GEMINI_API_KEY"):
+            st.error("錯誤：未找到 GEMINI_API_KEY。請在終端機中設定金鑰。")
+            return None
+            
+        # 初始化客戶端 (SDK會自動尋找 GEMINI_API_KEY 環境變數)
+        client = genai.Client()
+
+        st.info(f"正在向 Gemini 提交圖像生成任務，提示詞：{prompt}")
+        
+        # 組合 Neon Style 的背景圖提示詞，並指定風格
+        full_prompt = (
+            f"A vibrant, highly detailed, 8K image of a cryptocurrency news background. "
+            f"The image should feature neon lighting, glowing trading charts, and abstract blockchain elements. "
+            f"Style is 'Neon Cyberpunk'. No text, no logos, clean edges. "
+            f"The central theme is: {prompt}"
+        )
+        
+        # 呼叫 Gemini 的圖像生成服務
+        result = client.models.generate_images(
+            model='imagen-3.0-generate-002',  # 建議使用 Imagen 3.0 或更新的模型
+            prompt=full_prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+                output_mime_type="image/png",
+                aspect_ratio="16:9" # 或 "4:3"
+            )
+        )
+        
+        if result.generated_images:
+            # 成功生成圖片後，將 Base64 數據轉換為 PIL.Image 物件
+            img_data = result.generated_images[0].image.image_bytes
+            return Image.open(io.BytesIO(img_data))
+        
+        # 如果 API 返回但沒有圖片
+        st.error(f"Gemini 圖像生成失敗：API 未返回圖片。提示詞可能違規或請求超時。")
+        return None
+
+    except ImportError:
+        st.error("錯誤：請安裝 'google-genai' 庫。運行 pip install google-genai")
+        return None
+    except Exception as e:
+        # 處理 API Key 錯誤或網絡錯誤
+        if "API Key" in str(e) or "authentication" in str(e):
+             st.error("錯誤：請檢查 GEMINI_API_KEY 環境變數是否已正確設定，或金鑰是否有效。")
+        else:
+             st.error(f"Gemini 圖像生成發生錯誤: {e}")
+        return None
 
 
 # === 初始化 Session State (保持不變) ===
@@ -472,7 +494,7 @@ for idx, item in enumerate(st.session_state.news_data):
                 st.session_state.news_data[idx]['ai_prompt'] = ai_prompt 
                 
                 if st.button("生成 AI 圖片", key=f"btn_ai_gen_{idx}") and ai_prompt:
-                    with st.spinner("AI 圖片生成中，請稍候 (約 15-60 秒)..."):
+                    with st.spinner("Gemini 圖像生成中，請稍候..."):
                         generated_img = generate_ai_image_logic(ai_prompt)
                         if generated_img:
                              # AI 生成的圖通常需要保留背景
@@ -575,10 +597,6 @@ def generate_html_preview():
                 </div>
             </div>
             """
-        # 【修改點】移除：當有 token 時，預設將標題設為 text-green-300。
-        # 這樣可以避免自動偵測的代幣顏色覆蓋標題文字。
-        # elif has_token:
-        #     title_color_class = "text-green-300" 
             
         border_colors = [
             "border-green-500/30 shadow-[0_0_15px_rgba(74,222,128,0.15)]",
@@ -589,12 +607,10 @@ def generate_html_preview():
         border_class = border_colors[idx % len(border_colors)]
         title_style = f'class="text-3xl font-bold leading-tight mb-4 {title_color_class}"'
         
-        # 【調整點】將 token_html 移到最外層作為背景層，並將內容放在 z-10
-        # 傳統 token 圖片則放在右下角的 flex 容器內
-        
+        # 【調整點】根據模式決定內容和圖標的位置
         news_content_and_status_html = ""
         if item['token_mode'] == 'ai_image':
-             # AI 圖片作為背景，不需要右下角的圖標，但保留狀態圖示
+             # AI 圖片作為背景，不需要右下角的代幣圖標，但保留狀態圖示
              news_content_and_status_html = f"""
             <div class="absolute bottom-4 right-4 z-10">
                 <div class="flex items-end gap-3">
@@ -639,7 +655,6 @@ def generate_html_preview():
         </h1>
         """
 
-    # 修改點：移除 Lucide 的 CDN script 和 lucide.createIcons() 呼叫
     html_content = f"""
     <!DOCTYPE html>
     <html lang="zh-TW">
@@ -732,7 +747,7 @@ def generate_html_preview():
     return html_content
 
 st.markdown("### 4. 即時預覽")
-st.info("💡 說明：圖標已全面升級為高質感 SVG，並移除 Lucide 依賴。**新增了 AI 圖片生成模式 (請自行配置 API 邏輯)**。")
+st.info("💡 說明：圖標已全面升級為高質感 SVG，並移除 Lucide 依賴。**新增了 Gemini AI 圖片生成模式**。")
 
 preview_html = generate_html_preview()
 st.components.v1.html(preview_html, height=1000, scrolling=True)
